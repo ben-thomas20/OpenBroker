@@ -15,6 +15,13 @@ export default async function handler(
     return res.status(200).end();
   }
 
+  // Log for debugging (remove in production if needed)
+  console.log(`[API Proxy] ${req.method} ${req.url}`, {
+    path: req.query.path,
+    hasBody: !!req.body,
+    bodyType: typeof req.body
+  });
+
   // Get the path from the catch-all route
   const path = Array.isArray(req.query.path) 
     ? req.query.path.join('/') 
