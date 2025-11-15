@@ -12,10 +12,11 @@ import type {
   VettingResult
 } from '../types';
 
-// Use proxy in development, direct URL in production
-const API_BASE_URL = import.meta.env.DEV 
-  ? '/api'  // Vite proxy will forward to the actual server
-  : 'https://openbroker.boutiquesoftware.com';
+// Use environment variable if set, otherwise use proxy in development, direct URL in production
+const API_BASE_URL = import.meta.env.VITE_API_URL || 
+  (import.meta.env.DEV 
+    ? '/api'  // Vite proxy will forward to the actual server
+    : 'https://openbroker.boutiquesoftware.com');
 
 class ApiClient {
   private client: AxiosInstance;
