@@ -1,6 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const API_BASE_URL = process.env.VITE_API_URL || 'https://openbroker.boutiquesoftware.com';
+// Serverless function always proxies to the actual backend
+// VITE_API_URL is for the frontend, not for the serverless function
+const API_BASE_URL = process.env.BACKEND_API_URL || 'https://openbroker.boutiquesoftware.com';
 
 export default async function handler(
   req: VercelRequest,
