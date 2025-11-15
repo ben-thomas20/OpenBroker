@@ -10,7 +10,7 @@ import {
   TrendingUpIcon, 
   FileTextIcon, 
   ListIcon,
-  DollarSignIcon 
+  BarChart3Icon
 } from 'lucide-react';
 import type { 
   Account, 
@@ -19,7 +19,10 @@ import type {
   OrderState, 
   Balance, 
   Order,
-  AccountUpdate
+  AccountUpdate,
+  MarketData,
+  MarketDepth,
+  LastTrade
 } from '../types';
 
 export function DashboardPage() {
@@ -33,6 +36,69 @@ export function DashboardPage() {
   const [positions, setPositions] = useState<Record<number, Position>>({});
   const [orders, setOrders] = useState<Record<string, OrderState>>({});
   const [balance, setBalance] = useState<Balance | null>(null);
+  const [marketData, setMarketData] = useState<Record<string, MarketData>>({});
+  const [marketDepths, setMarketDepths] = useState<Record<string, MarketDepth>>({});
+  const [lastTrades, setLastTrades] = useState<Record<string, LastTrade>>({});
+
+  // Compute market data from depth and last trade
+  const computeMarketData = useCallback((instrumentKey: string, depth?: MarketDepth, lastTrade?: LastTrade) => {
+    const computed: MarketData = {
+      instrument_key: instrumentKey,
+      version_number: Math.max(
+        depth?.version_number || 0,
+        lastTrade?.version_number || 0
+      )
+    };
+
+    // Get bid from depth (best buy price)
+    if (depth?.buys && depth.buys.length > 0) {
+      const bestBuy = depth.buys[0];
+      computed.bid = bestBuy.price;
+      computed.bid_size = bestBuy.quantity;
+    }
+
+    // Get ask from depth (best sell price)
+    if (depth?.sells && depth.sells.length > 0) {
+      const bestSell = depth.sells[0];
+      computed.ask = bestSell.price;
+      computed.ask_size = bestSell.quantity;
+    }
+
+    // Compute mark as midpoint of bid/ask
+    if (computed.bid !== undefined && computed.ask !== undefined) {
+      computed.mark = (computed.bid + computed.ask) / 2;
+    } else if (computed.bid !== undefined) {
+      computed.mark = computed.bid;
+    } else if (computed.ask !== undefined) {
+      computed.mark = computed.ask;
+    }
+
+    // Get last trade
+    if (lastTrade) {
+      computed.last = lastTrade.price;
+      computed.last_size = lastTrade.quantity;
+    }
+
+    setMarketData(prev => {
+      const newMarketData = { ...prev };
+      const existing = newMarketData[instrumentKey];
+      if (!existing || existing.version_number < computed.version_number) {
+        newMarketData[instrumentKey] = computed;
+      }
+      return newMarketData;
+    });
+  }, []);
+
+  // Compute market data whenever depths or last trades change
+  useEffect(() => {
+    Object.keys(instruments).forEach(instrumentKey => {
+      const depth = marketDepths[instrumentKey];
+      const lastTrade = lastTrades[instrumentKey];
+      if (depth || lastTrade) {
+        computeMarketData(instrumentKey, depth, lastTrade);
+      }
+    });
+  }, [marketDepths, lastTrades, instruments, computeMarketData]);
   
   // UI state
   const [loading, setLoading] = useState(true);
@@ -165,6 +231,18 @@ export function DashboardPage() {
             return newOrders;
           });
         }
+        if (update.market) {
+          setMarketData(prev => {
+            const newMarketData = { ...prev };
+            const instrumentKey = update.market!.instrument_key;
+            const existing = newMarketData[instrumentKey];
+            // Only update if version is newer
+            if (!existing || existing.version_number < update.market!.version_number) {
+              newMarketData[instrumentKey] = update.market!;
+            }
+            return newMarketData;
+          });
+        }
       };
 
       wsClient.subscribe(selectedAccountKey, callback);
@@ -173,12 +251,53 @@ export function DashboardPage() {
       wsClient.sendRequest(selectedAccountKey, 'balance');
       wsClient.sendRequest(selectedAccountKey, 'positions');
       wsClient.sendRequest(selectedAccountKey, 'orders');
+      wsClient.sendRequest(selectedAccountKey, 'market');
 
       return () => {
         wsClient.unsubscribe(selectedAccountKey, callback);
       };
     }
   }, [selectedAccountKey, loadAccountData]);
+
+  // Subscribe to market data for all instruments when instruments are loaded
+  useEffect(() => {
+    if (Object.keys(instruments).length === 0) return;
+
+    const marketCallbacks: Array<{ instrumentKey: string; depthCallback: (data: MarketDepth) => void; lastTradeCallback: (data: LastTrade) => void }> = [];
+
+    Object.keys(instruments).forEach(instrumentKey => {
+      const depthCallback = (depth: MarketDepth) => {
+        setMarketDepths(prev => {
+          const newDepths = { ...prev };
+          const existing = newDepths[depth.instrument_key];
+          if (!existing || existing.version_number < depth.version_number) {
+            newDepths[depth.instrument_key] = depth;
+          }
+          return newDepths;
+        });
+      };
+
+      const lastTradeCallback = (lastTrade: LastTrade) => {
+        setLastTrades(prev => {
+          const newTrades = { ...prev };
+          const existing = newTrades[lastTrade.instrument_key];
+          if (!existing || existing.version_number < lastTrade.version_number) {
+            newTrades[lastTrade.instrument_key] = lastTrade;
+          }
+          return newTrades;
+        });
+      };
+
+      marketCallbacks.push({ instrumentKey, depthCallback, lastTradeCallback });
+      wsClient.subscribeToMarketData(instrumentKey, depthCallback, lastTradeCallback);
+    });
+
+    return () => {
+      marketCallbacks.forEach(({ instrumentKey, depthCallback, lastTradeCallback }) => {
+        wsClient.unsubscribeFromMarketData(instrumentKey, depthCallback, lastTradeCallback);
+      });
+    };
+  }, [instruments]);
 
   // Load data when account changes
   useEffect(() => {
@@ -284,6 +403,7 @@ export function DashboardPage() {
 
   const accountList = Object.values(accounts);
   const instrumentList = Object.values(instruments);
+  const activeInstrumentList = instrumentList.filter(inst => inst.status === 'Active');
   const positionList = Object.values(positions).filter(p => p.quantity !== 0 && 
     p.instrument_key !== '-cash-' && 
     p.instrument_key !== '-sub-totals-' && 
@@ -403,7 +523,7 @@ export function DashboardPage() {
       )}
 
       {/* Bento Grid Layout */}
-      <BentoGrid className="lg:grid-rows-4">
+      <BentoGrid>
         {/* Account & Balance Card */}
         <BentoCard
           name="Account & Balance"
@@ -481,7 +601,7 @@ export function DashboardPage() {
                       className="w-full rounded-lg border border-white/20 bg-black/40 backdrop-blur-sm px-3 py-2 text-sm text-white focus:border-white/40 focus:outline-none focus:ring-1 focus:ring-white/20"
                     >
                       <option value="" className="bg-black text-white">Select Instrument</option>
-                      {instrumentList.map((inst) => (
+                      {activeInstrumentList.map((inst) => (
                         <option key={inst.instrument_key} value={inst.instrument_key} className="bg-black text-white">
                           {inst.symbol} - {inst.description}
                         </option>
@@ -545,19 +665,87 @@ export function DashboardPage() {
           </BentoCard>
         )}
 
+        {/* Market Data Card */}
+        <BentoCard
+          name="Market Data"
+          className="lg:col-span-2 lg:row-span-1"
+          Icon={BarChart3Icon}
+          description={`Real-time market prices for ${Object.keys(marketData).length} instruments`}
+          href=""
+          cta=""
+        >
+          <div className="flex h-full flex-col">
+            <div className="mb-4 flex items-center gap-3">
+              <BarChart3Icon className="h-8 w-8 text-white" />
+              <h3 className="text-xl font-semibold text-white">Market Data</h3>
+            </div>
+            <div className="flex-1 overflow-auto">
+              {Object.keys(marketData).length === 0 ? (
+                <div className="flex h-full items-center justify-center text-gray-400">
+                  No market data available
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-white/10">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Instrument</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-300">Bid</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-300">Ask</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-300">Mark</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-300">Last</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.values(marketData).map((data) => {
+                        const instrument = instruments[data.instrument_key];
+                        return (
+                          <tr key={data.instrument_key} className="border-b border-white/5 hover:bg-white/5">
+                            <td className="px-3 py-2 font-semibold text-white">
+                              {instrument?.symbol || data.instrument_key}
+                            </td>
+                            <td className="px-3 py-2 text-right text-white">
+                              {data.bid !== undefined && data.bid_size !== undefined
+                                ? `${data.bid_size}@$${data.bid.toFixed(2)}`
+                                : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-right text-white">
+                              {data.ask !== undefined && data.ask_size !== undefined
+                                ? `${data.ask_size}@$${data.ask.toFixed(2)}`
+                                : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-right text-white">
+                              {data.mark !== undefined ? `$${data.mark.toFixed(2)}` : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-right text-white">
+                              {data.last !== undefined
+                                ? data.last_size !== undefined
+                                  ? `${data.last_size}@$${data.last.toFixed(2)}`
+                                  : `$${data.last.toFixed(2)}`
+                                : '-'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </BentoCard>
+
         {/* Positions Card */}
         {selectedAccountKey && (
           <BentoCard
             name="Positions"
             className="lg:col-span-1 lg:row-span-2"
-            Icon={DollarSignIcon}
             description={`${positionList.length} active positions`}
             href=""
             cta=""
           >
             <div className="flex h-full flex-col">
-              <div className="mb-4 flex items-center gap-3">
-                <DollarSignIcon className="h-8 w-8 text-white" />
+              <div className="mb-4">
                 <h3 className="text-xl font-semibold text-white">Positions</h3>
               </div>
               <div className="flex-1 overflow-auto">

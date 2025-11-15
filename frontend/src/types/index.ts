@@ -71,11 +71,40 @@ export interface VettingResult {
   reject_reason?: string;
 }
 
+export interface MarketDepth {
+  instrument_key: string;
+  version_number: number;
+  create_time: number;
+  buys: Array<{ price: number; quantity: number }>;
+  sells: Array<{ price: number; quantity: number }>;
+}
+
+export interface LastTrade {
+  instrument_key: string;
+  version_number: number;
+  create_time: number;
+  price: number;
+  quantity: number;
+}
+
+export interface MarketData {
+  instrument_key: string;
+  bid?: number;
+  bid_size?: number;
+  ask?: number;
+  ask_size?: number;
+  mark?: number;
+  last?: number;
+  last_size?: number;
+  version_number: number;
+}
+
 export interface AccountUpdate {
   balance?: Balance;
   position?: Position;
   trade?: any;
   order_state?: OrderState;
+  market?: MarketData;
 }
 
 export interface LoginCredentials {

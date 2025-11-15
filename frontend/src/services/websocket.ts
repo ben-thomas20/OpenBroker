@@ -1,6 +1,7 @@
-import type { AccountUpdate } from '../types';
+import type { AccountUpdate, MarketData, MarketDepth, LastTrade } from '../types';
 
 type WebSocketCallback = (data: AccountUpdate) => void;
+type MarketDataCallback = (data: MarketData) => void;
 
 class StompWebSocketClient {
   private ws: WebSocket | null = null;
@@ -8,6 +9,9 @@ class StompWebSocketClient {
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
   private callbacks: Map<string, WebSocketCallback[]> = new Map();
+  private marketCallbacks: Map<string, MarketDataCallback[]> = new Map();
+  private depthCallbacks: Map<string, ((data: MarketDepth) => void)[]> = new Map();
+  private lastTradeCallbacks: Map<string, ((data: LastTrade) => void)[]> = new Map();
   private subscriptions: Map<string, number> = new Map();
   private subscriptionCounter = 0;
   private connected = false;
@@ -116,8 +120,20 @@ class StompWebSocketClient {
 
     if (destination && body) {
       try {
-        const accountUpdate: AccountUpdate = JSON.parse(body);
-        this.notifyCallbacks(destination, accountUpdate);
+        // Check if this is a market data destination
+        if (destination.includes('/markets/') && destination.includes('/depth')) {
+          const depth: MarketDepth = JSON.parse(body);
+          this.notifyDepthCallbacks(destination, depth);
+        } else if (destination.includes('/markets/') && destination.includes('/last_trade')) {
+          const lastTrade: LastTrade = JSON.parse(body);
+          this.notifyLastTradeCallbacks(destination, lastTrade);
+        } else if (destination.startsWith('/market/')) {
+          const marketData: MarketData = JSON.parse(body);
+          this.notifyMarketCallbacks(destination, marketData);
+        } else {
+          const accountUpdate: AccountUpdate = JSON.parse(body);
+          this.notifyCallbacks(destination, accountUpdate);
+        }
       } catch (e) {
         // Invalid message format - ignore
       }
@@ -157,6 +173,15 @@ class StompWebSocketClient {
     for (const destination of this.callbacks.keys()) {
       this.subscribeToDestination(destination);
     }
+    for (const destination of this.marketCallbacks.keys()) {
+      this.subscribeToDestination(destination);
+    }
+    for (const destination of this.depthCallbacks.keys()) {
+      this.subscribeToDestination(destination);
+    }
+    for (const destination of this.lastTradeCallbacks.keys()) {
+      this.subscribeToDestination(destination);
+    }
   }
 
   unsubscribe(accountKey: string, callback: WebSocketCallback) {
@@ -180,7 +205,7 @@ class StompWebSocketClient {
     }
   }
 
-  sendRequest(accountKey: string, scope: 'balance' | 'positions' | 'orders') {
+  sendRequest(accountKey: string, scope: 'balance' | 'positions' | 'orders' | 'market') {
     if (!this.connected || this.ws?.readyState !== WebSocket.OPEN) {
       return;
     }
@@ -197,6 +222,87 @@ class StompWebSocketClient {
 
   private notifyCallbacks(destination: string, data: AccountUpdate) {
     const callbacks = this.callbacks.get(destination);
+    if (callbacks) {
+      callbacks.forEach(callback => callback(data));
+    }
+  }
+
+  private notifyMarketCallbacks(destination: string, data: MarketData) {
+    const callbacks = this.marketCallbacks.get(destination);
+    if (callbacks) {
+      callbacks.forEach(callback => callback(data));
+    }
+  }
+
+  subscribeToMarketData(instrumentKey: string, depthCallback: (data: MarketDepth) => void, lastTradeCallback: (data: LastTrade) => void) {
+    const depthDestination = `/markets/${instrumentKey}/depth`;
+    const lastTradeDestination = `/markets/${instrumentKey}/last_trade`;
+    
+    if (!this.depthCallbacks.has(depthDestination)) {
+      this.depthCallbacks.set(depthDestination, []);
+    }
+    this.depthCallbacks.get(depthDestination)!.push(depthCallback);
+
+    if (!this.lastTradeCallbacks.has(lastTradeDestination)) {
+      this.lastTradeCallbacks.set(lastTradeDestination, []);
+    }
+    this.lastTradeCallbacks.get(lastTradeDestination)!.push(lastTradeCallback);
+
+    // Subscribe via STOMP if connected
+    if (this.connected && this.ws?.readyState === WebSocket.OPEN) {
+      this.subscribeToDestination(depthDestination);
+      this.subscribeToDestination(lastTradeDestination);
+    }
+  }
+
+  unsubscribeFromMarketData(instrumentKey: string, depthCallback: (data: MarketDepth) => void, lastTradeCallback: (data: LastTrade) => void) {
+    const depthDestination = `/markets/${instrumentKey}/depth`;
+    const lastTradeDestination = `/markets/${instrumentKey}/last_trade`;
+    
+    const depthCallbacks = this.depthCallbacks.get(depthDestination);
+    if (depthCallbacks) {
+      const index = depthCallbacks.indexOf(depthCallback);
+      if (index > -1) {
+        depthCallbacks.splice(index, 1);
+      }
+      if (depthCallbacks.length === 0) {
+        this.depthCallbacks.delete(depthDestination);
+        const subId = this.subscriptions.get(depthDestination);
+        if (subId && this.ws?.readyState === WebSocket.OPEN) {
+          const unsubscribeMsg = `UNSUBSCRIBE\nid:${subId}\n\n\x00`;
+          this.ws.send(unsubscribeMsg);
+          this.subscriptions.delete(depthDestination);
+        }
+      }
+    }
+
+    const lastTradeCallbacks = this.lastTradeCallbacks.get(lastTradeDestination);
+    if (lastTradeCallbacks) {
+      const index = lastTradeCallbacks.indexOf(lastTradeCallback);
+      if (index > -1) {
+        lastTradeCallbacks.splice(index, 1);
+      }
+      if (lastTradeCallbacks.length === 0) {
+        this.lastTradeCallbacks.delete(lastTradeDestination);
+        const subId = this.subscriptions.get(lastTradeDestination);
+        if (subId && this.ws?.readyState === WebSocket.OPEN) {
+          const unsubscribeMsg = `UNSUBSCRIBE\nid:${subId}\n\n\x00`;
+          this.ws.send(unsubscribeMsg);
+          this.subscriptions.delete(lastTradeDestination);
+        }
+      }
+    }
+  }
+
+  private notifyDepthCallbacks(destination: string, data: MarketDepth) {
+    const callbacks = this.depthCallbacks.get(destination);
+    if (callbacks) {
+      callbacks.forEach(callback => callback(data));
+    }
+  }
+
+  private notifyLastTradeCallbacks(destination: string, data: LastTrade) {
+    const callbacks = this.lastTradeCallbacks.get(destination);
     if (callbacks) {
       callbacks.forEach(callback => callback(data));
     }
@@ -222,6 +328,9 @@ class StompWebSocketClient {
       this.ws = null;
     }
     this.callbacks.clear();
+    this.marketCallbacks.clear();
+    this.depthCallbacks.clear();
+    this.lastTradeCallbacks.clear();
     this.subscriptions.clear();
     this.reconnectAttempts = 0;
     this.connected = false;
