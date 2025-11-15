@@ -12,14 +12,11 @@ import type {
   VettingResult
 } from '../types';
 
-// Use environment variable if set, otherwise use proxy in development
-// In production, detect if we're on Vercel (has /api serverless function) or use direct URL
+// Use environment variable if set, otherwise use proxy in development, direct URL in production
 const API_BASE_URL = import.meta.env.VITE_API_URL || 
   (import.meta.env.DEV 
     ? '/api'  // Vite proxy will forward to the actual server
-    : (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')
-      ? '/api'  // Vercel serverless function proxy (handles CORS and cookies)
-      : 'https://openbroker.boutiquesoftware.com')); // Direct URL for other deployments
+    : 'https://openbroker.boutiquesoftware.com');
 
 class ApiClient {
   private client: AxiosInstance;
