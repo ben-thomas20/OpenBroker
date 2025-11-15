@@ -20,13 +20,23 @@ export default async function handler(
     ? req.query.path.join('/') 
     : req.query.path || '';
 
-  // Get query string from original URL
-  const queryString = req.url?.includes('?') 
-    ? req.url.substring(req.url.indexOf('?')) 
-    : '';
+  // Get query string from query parameters (Vercel provides these separately)
+  const queryParams = new URLSearchParams();
+  Object.entries(req.query).forEach(([key, value]) => {
+    if (key !== 'path' && value) {
+      if (Array.isArray(value)) {
+        value.forEach(v => queryParams.append(key, v));
+      } else {
+        queryParams.append(key, value);
+      }
+    }
+  });
+  const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
 
-  // Construct the full URL
-  const url = `${API_BASE_URL}/${path}${queryString}`;
+  // Construct the full URL - only add path if it exists
+  const url = path 
+    ? `${API_BASE_URL}/${path}${queryString}`
+    : `${API_BASE_URL}${queryString}`;
 
   try {
     // Prepare headers
@@ -53,11 +63,13 @@ export default async function handler(
 
     // Forward body for POST/PUT/PATCH/DELETE requests
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method || '')) {
-      if (req.body) {
+      // Vercel automatically parses JSON bodies, but we need to stringify them for fetch
+      if (req.body !== undefined && req.body !== null) {
         fetchOptions.body = typeof req.body === 'string' 
           ? req.body 
           : JSON.stringify(req.body);
       }
+      // If no body, don't set it - let fetch handle it
     }
 
     // Forward the request to the backend API
