@@ -1,12 +1,12 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { api } from '../services/api';
-import type { Account, Instrument, Position, Order } from '../types';
+import type { Account, Instrument, Position, OrderState } from '../types';
 
 interface DataContextType {
   accounts: Account[];
   instruments: Instrument[];
   portfolio: Position[];
-  orders: Order[];
+  orders: OrderState[];
   selectedAccount: string | null;
   loading: boolean;
   setSelectedAccount: (accountId: string | null) => void;
@@ -19,24 +19,36 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [instruments, setInstruments] = useState<Instrument[]>([]);
   const [portfolio, setPortfolio] = useState<Position[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<OrderState[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const [accountsData, instrumentsData, portfolioData, ordersData] = await Promise.all([
+      const [accountsData, instrumentsData] = await Promise.all([
         api.getAccounts(),
         api.getInstruments(),
-        api.getPortfolio(selectedAccount || undefined),
-        api.getOrders(selectedAccount || undefined),
       ]);
 
-      setAccounts(accountsData);
-      setInstruments(instrumentsData);
-      setPortfolio(portfolioData);
-      setOrders(ordersData);
+      // Convert Record types to arrays
+      setAccounts(Object.values(accountsData));
+      setInstruments(Object.values(instrumentsData));
+
+      // Only fetch portfolio and orders if an account is selected
+      if (selectedAccount) {
+        const [portfolioData, ordersData] = await Promise.all([
+          api.getPositions(selectedAccount),
+          api.getOrders(selectedAccount),
+        ]);
+
+        // Convert Record types to arrays
+        setPortfolio(Object.values(portfolioData));
+        setOrders(Object.values(ordersData));
+      } else {
+        setPortfolio([]);
+        setOrders([]);
+      }
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
