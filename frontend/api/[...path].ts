@@ -1,0 +1,114 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+const API_BASE_URL = process.env.VITE_API_URL || 'https://openbroker.boutiquesoftware.com';
+
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse
+) {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, Accept');
+    return res.status(200).end();
+  }
+
+  // Get the path from the catch-all route
+  const path = Array.isArray(req.query.path) 
+    ? req.query.path.join('/') 
+    : req.query.path || '';
+
+  // Get query string from original URL
+  const queryString = req.url?.includes('?') 
+    ? req.url.substring(req.url.indexOf('?')) 
+    : '';
+
+  // Construct the full URL
+  const url = `${API_BASE_URL}/${path}${queryString}`;
+
+  try {
+    // Prepare headers
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': '*/*',
+    };
+
+    // Forward cookies from the incoming request
+    if (req.headers.cookie) {
+      headers['Cookie'] = req.headers.cookie;
+    }
+
+    // Forward authorization header if present
+    if (req.headers.authorization) {
+      headers['Authorization'] = req.headers.authorization;
+    }
+
+    // Prepare fetch options
+    const fetchOptions: RequestInit = {
+      method: req.method,
+      headers,
+    };
+
+    // Forward body for POST/PUT/PATCH/DELETE requests
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method || '')) {
+      if (req.body) {
+        fetchOptions.body = typeof req.body === 'string' 
+          ? req.body 
+          : JSON.stringify(req.body);
+      }
+    }
+
+    // Forward the request to the backend API
+    const response = await fetch(url, fetchOptions);
+
+    // Get response data
+    const contentType = response.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const data = isJson ? await response.json() : await response.text();
+    
+    // Set CORS headers to allow credentials
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, Accept');
+
+    // Forward Set-Cookie headers (critical for session management)
+    const setCookieHeaders = response.headers.getSetCookie();
+    if (setCookieHeaders && setCookieHeaders.length > 0) {
+      // Vercel requires setting Set-Cookie headers individually
+      setCookieHeaders.forEach((cookie) => {
+        res.setHeader('Set-Cookie', cookie);
+      });
+    }
+
+    // Forward other important headers
+    const headersToForward = ['content-type', 'content-length', 'cache-control'];
+    headersToForward.forEach((headerName) => {
+      const headerValue = response.headers.get(headerName);
+      if (headerValue) {
+        res.setHeader(headerName, headerValue);
+      }
+    });
+
+    // Forward status
+    res.status(response.status);
+
+    // Send response body
+    if (isJson) {
+      res.json(data);
+    } else {
+      res.send(data);
+    }
+  } catch (error: any) {
+    console.error('Proxy error:', error);
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.status(500).json({ 
+      error: 'Proxy error', 
+      message: error.message 
+    });
+  }
+}
+
