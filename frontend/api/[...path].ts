@@ -30,11 +30,15 @@ export default async function handler(
   // Get query string from query parameters (Vercel provides these separately)
   const queryParams = new URLSearchParams();
   Object.entries(req.query).forEach(([key, value]) => {
-    if (key !== 'path' && value) {
+    if (key !== 'path' && value !== undefined && value !== null) {
       if (Array.isArray(value)) {
-        value.forEach(v => queryParams.append(key, v));
+        value.forEach(v => {
+          if (v !== undefined && v !== null) {
+            queryParams.append(key, String(v));
+          }
+        });
       } else {
-        queryParams.append(key, value);
+        queryParams.append(key, String(value));
       }
     }
   });
@@ -44,6 +48,8 @@ export default async function handler(
   const url = path 
     ? `${API_BASE_URL}/${path}${queryString}`
     : `${API_BASE_URL}${queryString}`;
+  
+  console.log(`[API Proxy] Proxying to: ${url}`);
 
   try {
     // Prepare headers
@@ -94,10 +100,12 @@ export default async function handler(
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, Accept');
 
     // Forward Set-Cookie headers (critical for session management)
-    const setCookieHeaders = response.headers.getSetCookie();
-    if (setCookieHeaders && setCookieHeaders.length > 0) {
-      // Vercel requires setting Set-Cookie headers individually
-      setCookieHeaders.forEach((cookie) => {
+    // Use getAll() instead of getSetCookie() for better compatibility
+    const setCookieHeader = response.headers.get('set-cookie');
+    if (setCookieHeader) {
+      // Handle both single string and array of strings
+      const cookies = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+      cookies.forEach((cookie) => {
         res.setHeader('Set-Cookie', cookie);
       });
     }
